@@ -1,0 +1,7 @@
+{
+    "files.associations": {
+        "fatbin-decompress.h": "c",
+        "utils.h": "c",
+        "stdint.h": "c"
+    }
+}
