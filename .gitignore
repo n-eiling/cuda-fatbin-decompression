@@ -2,3 +2,7 @@
 main
 decompress
 compile_commands.json
+samples
+*.fatbin
+*.compressed
+*.uncompressed

@@ -16,39 +16,8 @@
 #include <fcntl.h>
 
 #include "fatbin-decompress.h"
+#include "utils.h"
 
-
-void hexdump(uint8_t* data, size_t size)
-{
-    size_t pos = 0;
-    while (pos < size) {
-        printf("%#05zx: ", pos);
-        for (int i = 0; i < 16; i++) {
-            if (pos + i < size) {
-                printf("%02x", data[pos + i]);
-            } else {
-                printf("  ");
-            }
-            if (i % 4 == 3) {
-                printf(" ");
-            }
-        }
-        printf(" | ");
-        for (int i = 0; i < 16; i++) {
-            if (pos + i < size) {
-                if (data[pos + i] >= 0x20 && data[pos + i] <= 0x7e) {
-                    printf("%c", data[pos + i]);
-                } else {
-                    printf(".");
-                }
-            } else {
-                printf(" ");
-            }
-        }
-        printf("\n");
-        pos += 16;
-    }
-}
 
 int compare_to_file(const char* filename, const uint8_t* data, size_t size)
 {
@@ -81,14 +50,19 @@ int main(int argc, char *argv[])
 {
     int fd;
     struct stat st;
-    uint8_t *data;
-    uint8_t output[0x10000];
-    size_t outsize;
-    size_t size;
+    uint8_t *file_data;
+    const uint8_t *cur_file_pos;
+    int i = 0;
+    uint8_t *output = NULL;
+    size_t output_size = 0;
+    size_t filesize;
+    struct fat_elf_header *eh;
+    struct fat_text_header *th;
+
     int compare = 0;
 
     if (argc < 2 || argc > 3) {
-        printf("Usage: %s <file>", argv[0]);
+        fprintf(stderr, "Usage: %s <file>\n", argv[0]);
         return 1;
     }
 
@@ -97,36 +71,55 @@ int main(int argc, char *argv[])
     }
 
     if ((fd = open(argv[1], O_RDONLY)) == -1) {
-        printf("Error opening file: %s", strerror(errno));
+        fprintf(stderr, "Error opening file: %s\n", strerror(errno));
         return 1;
     }
 
     if (fstat(fd, &st) == -1) {
-        printf("Error getting file size: %s", strerror(errno));
+        fprintf(stderr, "Error getting file size: %s\n", strerror(errno));
         return 1;
     }
 
     printf("File size: %#0zx\n", st.st_size);
 
-    if ((data = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0)) == MAP_FAILED) {
-        printf("Error mapping file: %s", strerror(errno));
+    if ((file_data = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0)) == MAP_FAILED) {
+        fprintf(stderr, "Error mapping file: %s\n", strerror(errno));
         return 1;
     }
 
-    size = st.st_size;
+    filesize = st.st_size;
 
-    hexdump(data, size);
+    hexdump(file_data, filesize);
 
-    if ((outsize = decompress(data, size, output, sizeof(output))) == 0) {
-        printf("Decompression failed");
-        return 1;
+    cur_file_pos = file_data;
+    while (cur_file_pos < file_data + filesize) {
+        printf("##### .text section no. %d: #####\n", i++);
+        if (check_header(cur_file_pos, filesize, &eh, &th) != 0) {
+            fprintf(stderr, "Something went wrong while checking the header.\n");
+            return 1;
+        }
+
+        if ((output = realloc(output, output_size + th->decompressed_size)) == NULL) {
+            fprintf(stderr, "Error allocating memory for output buffer: %s\n", strerror(errno));
+            return 1;
+        }
+
+        if (decompress(cur_file_pos + eh->header_size + th->header_size,
+                       th->compressed_size, output + output_size, th->decompressed_size) != th->decompressed_size) {
+            fprintf(stderr, "Decompression failed\n");
+            return 1;
+        }
+
+        printf("##### Decompressed data (size %#zx): #####\n", th->decompressed_size);
+        hexdump(output + output_size, th->decompressed_size);
+
+        output_size += th->decompressed_size;
+        cur_file_pos += eh->size + eh->header_size;
     }
-
-    hexdump(output, outsize);
 
     if (compare) {
-        if (compare_to_file(argv[2], output, outsize) != 0) {
-            printf("Data mismatch");
+        if (compare_to_file(argv[2], output, output_size) != 0) {
+            fprintf(stderr, "Data mismatch\n");
             return 1;
         }
     }
