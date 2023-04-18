@@ -2,6 +2,14 @@
     "files.associations": {
         "fatbin-decompress.h": "c",
         "utils.h": "c",
-        "stdint.h": "c"
+        "stdint.h": "c",
+        "array": "c",
+        "string": "c",
+        "string_view": "c",
+        "hash_map": "c",
+        "initializer_list": "c",
+        "errno.h": "c",
+        "mman.h": "c",
+        "stdio.h": "c"
     }
 }

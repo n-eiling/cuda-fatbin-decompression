@@ -8,12 +8,13 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdint.h>
-
 #include <sys/mman.h>
-#include <sys/stat.h> 
+#include <sys/stat.h>
+
 #include <errno.h>
 #include <string.h>
 #include <fcntl.h>
+#include <unistd.h>
 
 #include "fatbin-decompress.h"
 #include "utils.h"
@@ -46,16 +47,65 @@ int compare_to_file(const char* filename, const uint8_t* data, size_t size)
     return 0;
 }
 
+struct mapped_file {
+    int fd;
+    uint8_t *data;
+    size_t size;
+};
+
+int mf_open_file(const char *filename, struct mapped_file *mf)
+{
+    struct stat st;
+
+    if (filename == NULL || mf == NULL) {
+        fprintf(stderr, "Invalid arguments\n");
+        return 1;
+    }
+
+    if ((mf->fd = open(filename, O_RDONLY)) == -1) {
+        fprintf(stderr, "Error opening file: %s\n", strerror(errno));
+        return 1;
+    }
+
+    if (fstat(mf->fd, &st) == -1) {
+        fprintf(stderr, "Error getting file size: %s\n", strerror(errno));
+        return 1;
+    }
+
+    printf("File size: %#0zx\n", st.st_size);
+    mf->size = st.st_size;
+
+    if ((mf->data = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, mf->fd, 0)) == MAP_FAILED) {
+        fprintf(stderr, "Error mapping file: %s\n", strerror(errno));
+        return 1;
+    }
+    return 0;
+}
+
+void mf_close(struct mapped_file *mf)
+{
+    if (mf == NULL) {
+        return;
+    }
+
+    if (mf->data != NULL) {
+        munmap(mf->data, mf->size);
+    }
+    mf->data = NULL;
+    mf->size = 0;
+
+    if (mf->fd != -1) {
+        close(mf->fd);
+    }
+}
+
 int main(int argc, char *argv[])
 {
-    int fd;
-    struct stat st;
-    uint8_t *file_data;
+    struct mapped_file mf;
     const uint8_t *cur_file_pos;
     int i = 0;
     uint8_t *output = NULL;
     size_t output_size = 0;
-    size_t filesize;
     struct fat_elf_header *eh;
     struct fat_text_header *th;
 
@@ -70,31 +120,19 @@ int main(int argc, char *argv[])
         compare = 1;
     }
 
-    if ((fd = open(argv[1], O_RDONLY)) == -1) {
-        fprintf(stderr, "Error opening file: %s\n", strerror(errno));
+    if (mf_open_file(argv[1], &mf) != 0) {
+        fprintf(stderr, "Error opening mapped file: %s\n", strerror(errno));
         return 1;
     }
 
-    if (fstat(fd, &st) == -1) {
-        fprintf(stderr, "Error getting file size: %s\n", strerror(errno));
-        return 1;
-    }
+    printf("File size: %#0zx\n", mf.size);
 
-    printf("File size: %#0zx\n", st.st_size);
+    hexdump(mf.data, mf.size);
 
-    if ((file_data = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0)) == MAP_FAILED) {
-        fprintf(stderr, "Error mapping file: %s\n", strerror(errno));
-        return 1;
-    }
-
-    filesize = st.st_size;
-
-    hexdump(file_data, filesize);
-
-    cur_file_pos = file_data;
-    while (cur_file_pos < file_data + filesize) {
+    cur_file_pos = mf.data;
+    while (cur_file_pos < mf.data + mf.size) {
         printf("##### .text section no. %d: #####\n", i++);
-        if (check_header(cur_file_pos, filesize, &eh, &th) != 0) {
+        if (get_header(cur_file_pos, mf.size - (cur_file_pos - mf.data), &eh, &th) != 0) {
             fprintf(stderr, "Something went wrong while checking the header.\n");
             return 1;
         }
@@ -123,6 +161,8 @@ int main(int argc, char *argv[])
             return 1;
         }
     }
+
+    mf_close(&mf);
 
     return 0;
 }

@@ -5,8 +5,14 @@
  * SPDX-License-Identifier: Apache-2.0
  *********************************************************************************/
 
+
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
+#include <errno.h>
+#include <string.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #include "fatbin-decompress.h"
 #include "utils.h"
@@ -24,7 +30,7 @@
  * @param decompressed_size Pointer to a variable that will be set to the size of the decompressed data
  * @param compressed_data Pointer to a variable that will be set to point to the compressed data
 */
-int check_header(const uint8_t* fatbin_data, size_t fatbin_size, struct fat_elf_header **elf_header,
+int get_header(const uint8_t* fatbin_data, size_t fatbin_size, struct fat_elf_header **elf_header,
                  struct fat_text_header **text_header)
 {
     struct fat_elf_header *eh = NULL;
@@ -32,24 +38,24 @@ int check_header(const uint8_t* fatbin_data, size_t fatbin_size, struct fat_elf_
 
     if (fatbin_data == NULL || elf_header == NULL || text_header == NULL) {
         fprintf(stderr, "Error: fatbin_data is NULL\n");
-        return -1;
+        return 1;
     }
 
     if (fatbin_size < sizeof(struct fat_elf_header) + sizeof(struct fat_text_header)) {
         fprintf(stderr, "Error: fatbin_size is too small\n");
-        return -1;
+        return 1;
     }
 
     eh = (struct fat_elf_header*) fatbin_data;
     if (eh->magic != FATBIN_TEXT_MAGIC) {
         fprintf(stderr, "Error: Invalid magic  number: expected %#x but got %#x\n", FATBIN_TEXT_MAGIC, eh->magic);
-        return -1;
+        return 1;
     }
 
     if (eh->version != 1 || eh->header_size != sizeof(struct fat_elf_header)) {
         fprintf(stderr, "fatbin text version is wrong or header size is inconsistent.\
             This is a sanity check to avoid reading a new fatbinary format\n");
-        return -1;
+        return 1;
     }
 
     th = (struct fat_text_header*) (fatbin_data + eh->header_size);
@@ -128,4 +134,54 @@ size_t decompress(const uint8_t* input, size_t input_size, uint8_t* output, size
         opos += next_clen;
     }
     return opos;
+}
+
+size_t decompress_fatbin(const uint8_t* fatbin_data, size_t fatbin_size, uint8_t** decompressed_data)
+{
+    struct fat_elf_header *eh = NULL;
+    struct fat_text_header *th = NULL;
+    const uint8_t *cur_file_pos;
+    int i = 0;
+    uint8_t *output = NULL;
+    size_t output_size = 0;
+
+    if (fatbin_data == NULL || decompressed_data == NULL) {
+        fprintf(stderr, "Error: fatbin_data is NULL\n");
+        goto error;
+    }
+
+    cur_file_pos = fatbin_data;
+    while (cur_file_pos < fatbin_data + fatbin_size) {
+        printf("##### .text section no. %d: #####\n", i++);
+        if (get_header(cur_file_pos, fatbin_size - (cur_file_pos - fatbin_data), &eh, &th) != 0) {
+            fprintf(stderr, "Something went wrong while checking the header.\n");
+            goto error;
+        }
+
+        if ((output = realloc(output, output_size + th->decompressed_size)) == NULL) {
+            fprintf(stderr, "Error allocating memory for output buffer: %s\n", strerror(errno));
+            goto error;
+        }
+
+        if (decompress(cur_file_pos + eh->header_size + th->header_size,
+                       th->compressed_size, output + output_size, th->decompressed_size) != th->decompressed_size) {
+            fprintf(stderr, "Decompression failed\n");
+            goto error;
+        }
+
+        printf("##### Decompressed data (size %#zx): #####\n", th->decompressed_size);
+        hexdump(output + output_size, th->decompressed_size);
+
+        output_size += th->decompressed_size;
+        cur_file_pos += eh->size + eh->header_size;
+    }
+
+    *decompressed_data = output;
+    return output_size;
+ error:
+    if (output != NULL) {
+        free(output);
+    }
+    *decompressed_data = NULL;
+    return 0;
 }
