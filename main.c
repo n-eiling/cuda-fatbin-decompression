@@ -19,6 +19,21 @@
 #include "fatbin-decompress.h"
 #include "utils.h"
 
+int compare_data(const uint8_t* data1, const uint8_t* data2, size_t size)
+{
+    if (data1 == NULL || data2 == NULL) {
+        fprintf(stderr, "Invalid arguments\n");
+        return 1;
+    }
+
+    for (size_t i = 0; i < size; i++) {
+        if (data1[i] != data2[i]) {
+            fprintf(stderr, "Data mismatch at offset %#0zx: %#0x != %#0x\n", i, data1[i], data2[i]);
+            //return 1;
+        }
+    }
+    return 0;
+}
 
 int compare_to_file(const char* filename, const uint8_t* data, size_t size)
 {
@@ -102,12 +117,8 @@ void mf_close(struct mapped_file *mf)
 int main(int argc, char *argv[])
 {
     struct mapped_file mf;
-    const uint8_t *cur_file_pos;
-    int i = 0;
     uint8_t *output = NULL;
     size_t output_size = 0;
-    struct fat_elf_header *eh;
-    struct fat_text_header *th;
 
     int compare = 0;
 
@@ -125,44 +136,36 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    printf("File size: %#0zx\n", mf.size);
-
     hexdump(mf.data, mf.size);
 
-    cur_file_pos = mf.data;
-    while (cur_file_pos < mf.data + mf.size) {
-        printf("##### .text section no. %d: #####\n", i++);
-        if (get_header(cur_file_pos, mf.size - (cur_file_pos - mf.data), &eh, &th) != 0) {
-            fprintf(stderr, "Something went wrong while checking the header.\n");
-            return 1;
-        }
-
-        if ((output = realloc(output, output_size + th->decompressed_size)) == NULL) {
-            fprintf(stderr, "Error allocating memory for output buffer: %s\n", strerror(errno));
-            return 1;
-        }
-
-        if (decompress(cur_file_pos + eh->header_size + th->header_size,
-                       th->compressed_size, output + output_size, th->decompressed_size) != th->decompressed_size) {
-            fprintf(stderr, "Decompression failed\n");
-            return 1;
-        }
-
-        printf("##### Decompressed data (size %#zx): #####\n", th->decompressed_size);
-        hexdump(output + output_size, th->decompressed_size);
-
-        output_size += th->decompressed_size;
-        cur_file_pos += eh->size + eh->header_size;
+    if ((output_size = decompress_fatbin(mf.data, mf.size, &output)) == 0) {
+        fprintf(stderr, "Error decompressing fatbin\n");
+        return 1;
     }
 
+    printf("Decompressed data size: %#0zx", output_size);
+    hexdump(output, output_size);
+
     if (compare) {
-        if (compare_to_file(argv[2], output, output_size) != 0) {
+        struct mapped_file compare_file;
+        if (mf_open_file(argv[2], &compare_file) != 0) {
+            fprintf(stderr, "Error opening mapped file: %s\n", strerror(errno));
+            return 1;
+        }
+
+        if (compare_file.size != output_size) {
+            fprintf(stderr, "Data size mismatch: %#0zx != %#0zx\n", compare_file.size, output_size);
+        }
+
+        if (compare_data(compare_file.data, output, output_size) != 0) {
             fprintf(stderr, "Data mismatch\n");
             return 1;
         }
+        mf_close(&compare_file);
     }
 
     mf_close(&mf);
+    free(output);
 
     return 0;
 }

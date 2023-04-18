@@ -62,4 +62,4 @@ matrixMul.uncompressed.fatbin : matrixMul.uncompressed
 	objcopy -O binary --only-section=.nv_fatbin $< $@
 
 clean :
-	rm -f *.o *.d .depend *~ $(BINARY) samples matrixMul matrixMul.fatbin
+	rm -f *.o *.d .depend *~ $(BINARY) matrixMul matrixMul.fatbin *.compressed *.uncompressed

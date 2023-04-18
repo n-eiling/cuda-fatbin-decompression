@@ -40,5 +40,6 @@ int get_header(const uint8_t* fatbin_data, size_t fatbin_size, struct fat_elf_he
                  struct fat_text_header **text_header);
 
 size_t decompress(const uint8_t* input, size_t input_size, uint8_t* output, size_t output_size);
+size_t decompress_fatbin(const uint8_t* fatbin_data, size_t fatbin_size, uint8_t** decompressed_data);
 
 #endif // __FATBIN_DECOMPRESS_H__

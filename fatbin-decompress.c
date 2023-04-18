@@ -17,9 +17,9 @@
 #include "fatbin-decompress.h"
 #include "utils.h"
 
-#define FATBIN_DECOMPRESS_DEBUG 1
+//#define FATBIN_DECOMPRESS_DEBUG 1
 
-#define FATBIN_TEXT_MAGIC       0xBA55ED50
+#define FATBIN_TEXT_MAGIC     0xBA55ED50
 #define FATBIN_FLAG_DEBUG     0x0000000000000002LL
 #define FATBIN_FLAG_COMPRESS  0x0000000000002000LL
 
@@ -140,9 +140,11 @@ size_t decompress_fatbin(const uint8_t* fatbin_data, size_t fatbin_size, uint8_t
 {
     struct fat_elf_header *eh = NULL;
     struct fat_text_header *th = NULL;
-    const uint8_t *cur_file_pos;
+    const uint8_t *input_pos = fatbin_data;
+
     int i = 0;
     uint8_t *output = NULL;
+    uint8_t *output_pos = NULL;
     size_t output_size = 0;
 
     if (fatbin_data == NULL || decompressed_data == NULL) {
@@ -150,30 +152,46 @@ size_t decompress_fatbin(const uint8_t* fatbin_data, size_t fatbin_size, uint8_t
         goto error;
     }
 
-    cur_file_pos = fatbin_data;
-    while (cur_file_pos < fatbin_data + fatbin_size) {
+    while (input_pos < fatbin_data + fatbin_size) {
         printf("##### .text section no. %d: #####\n", i++);
-        if (get_header(cur_file_pos, fatbin_size - (cur_file_pos - fatbin_data), &eh, &th) != 0) {
+        if (get_header(input_pos, fatbin_size - (input_pos - fatbin_data), &eh, &th) != 0) {
             fprintf(stderr, "Something went wrong while checking the header.\n");
             goto error;
         }
+        input_pos += eh->header_size + th->header_size;
 
-        if ((output = realloc(output, output_size + th->decompressed_size)) == NULL) {
+        if ((output = realloc(output, output_size + th->decompressed_size + eh->header_size + th->header_size)) == NULL) {
             fprintf(stderr, "Error allocating memory for output buffer: %s\n", strerror(errno));
             goto error;
         }
+        output_pos = output + output_size;
+        output_size += th->decompressed_size + eh->header_size + th->header_size;
 
-        if (decompress(cur_file_pos + eh->header_size + th->header_size,
-                       th->compressed_size, output + output_size, th->decompressed_size) != th->decompressed_size) {
+        if (memcpy(output_pos, eh, eh->header_size) == NULL) {
+            fprintf(stderr, "Error copying data");
+            goto error;
+        }
+        output_pos += eh->header_size;
+
+        if (memcpy(output_pos, th, th->header_size) == NULL) {
+            fprintf(stderr, "Error copying data");
+            goto error;
+        }
+        ((struct fat_text_header*)output_pos)->flags &= ~FATBIN_FLAG_COMPRESS;  // clear compressed flag
+        ((struct fat_text_header*)output_pos)->compressed_size = 0;             // clear compressed size
+        ((struct fat_text_header*)output_pos)->decompressed_size = 0;           // clear decompressed size
+
+        output_pos += th->header_size;
+
+        if (decompress(input_pos, th->compressed_size, output_pos, th->decompressed_size) != th->decompressed_size) {
             fprintf(stderr, "Decompression failed\n");
             goto error;
         }
 
         printf("##### Decompressed data (size %#zx): #####\n", th->decompressed_size);
-        hexdump(output + output_size, th->decompressed_size);
+        hexdump(output_pos, th->decompressed_size);
 
-        output_size += th->decompressed_size;
-        cur_file_pos += eh->size + eh->header_size;
+        input_pos += eh->size - th->header_size;
     }
 
     *decompressed_data = output;
