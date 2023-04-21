@@ -21,6 +21,7 @@
 
 int compare_data(const uint8_t* data1, const uint8_t* data2, size_t size)
 {
+    int mismatch = 0;
     if (data1 == NULL || data2 == NULL) {
         fprintf(stderr, "Invalid arguments\n");
         return 1;
@@ -29,10 +30,10 @@ int compare_data(const uint8_t* data1, const uint8_t* data2, size_t size)
     for (size_t i = 0; i < size; i++) {
         if (data1[i] != data2[i]) {
             fprintf(stderr, "Data mismatch at offset %#0zx: %#0x != %#0x\n", i, data1[i], data2[i]);
-            //return 1;
+            mismatch = 1;
         }
     }
-    return 0;
+    return (mismatch == 0 ? 0 : 1);
 }
 
 int compare_to_file(const char* filename, const uint8_t* data, size_t size)
@@ -87,7 +88,6 @@ int mf_open_file(const char *filename, struct mapped_file *mf)
         return 1;
     }
 
-    printf("File size: %#0zx\n", st.st_size);
     mf->size = st.st_size;
 
     if ((mf->data = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, mf->fd, 0)) == MAP_FAILED) {
@@ -136,15 +136,17 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    hexdump(mf.data, mf.size);
+    printf("Compressed file size: %#0zx\n", mf.size);
+
+    //hexdump(mf.data, mf.size);
 
     if ((output_size = decompress_fatbin(mf.data, mf.size, &output)) == 0) {
         fprintf(stderr, "Error decompressing fatbin\n");
         return 1;
     }
 
-    printf("Decompressed data size: %#0zx", output_size);
-    hexdump(output, output_size);
+    printf("Decompressed data size: %#0zx\n", output_size);
+    //hexdump(output, output_size);
 
     if (compare) {
         struct mapped_file compare_file;
@@ -152,6 +154,8 @@ int main(int argc, char *argv[])
             fprintf(stderr, "Error opening mapped file: %s\n", strerror(errno));
             return 1;
         }
+
+        printf("Compare file size: %#0zx\n", compare_file.size);
 
         if (compare_file.size != output_size) {
             fprintf(stderr, "Data size mismatch: %#0zx != %#0zx\n", compare_file.size, output_size);
@@ -162,10 +166,11 @@ int main(int argc, char *argv[])
             return 1;
         }
         mf_close(&compare_file);
+        printf("Data matches.\n");
     }
 
     mf_close(&mf);
     free(output);
-
+    printf("success.\n");
     return 0;
 }

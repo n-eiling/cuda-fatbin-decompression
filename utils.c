@@ -8,7 +8,7 @@
 #include <stdio.h>
 #include "utils.h"
 
-void hexdump(uint8_t* data, size_t size)
+void hexdump(const uint8_t* data, size_t size)
 {
     size_t pos = 0;
     while (pos < size) {

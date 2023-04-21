@@ -22,8 +22,9 @@ struct  __attribute__((__packed__)) fat_text_header
     uint16_t kind;
     uint16_t unknown1;
     uint32_t header_size;
-    uint64_t fatbin_size;
-    uint64_t compressed_size;       // Size of compressed data
+    uint64_t size;
+    uint32_t compressed_size;       // Size of compressed data
+    uint32_t unknown2; 
     uint16_t minor;
     uint16_t major;
     uint32_t arch;
@@ -33,11 +34,8 @@ struct  __attribute__((__packed__)) fat_text_header
     uint64_t zero;                  // Alignment for compression?
     uint64_t decompressed_size;     // Length of compressed data in decompressed representation.
                                     // There is an uncompressed footer so this is generally smaller
-                                    // than fatbin_size.
+                                    // than size.
 };
-
-int get_header(const uint8_t* fatbin_data, size_t fatbin_size, struct fat_elf_header **elf_header,
-                 struct fat_text_header **text_header);
 
 size_t decompress(const uint8_t* input, size_t input_size, uint8_t* output, size_t output_size);
 size_t decompress_fatbin(const uint8_t* fatbin_data, size_t fatbin_size, uint8_t** decompressed_data);

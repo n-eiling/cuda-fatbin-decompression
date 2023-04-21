@@ -10,6 +10,6 @@
 
 #include <stdint.h>
 
-void hexdump(uint8_t* data, size_t size);
+void hexdump(const uint8_t* data, size_t size);
 
 #endif // UTILS_H
