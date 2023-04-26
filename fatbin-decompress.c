@@ -115,6 +115,15 @@ static int get_text_header(const uint8_t* fatbin_data, size_t fatbin_size, struc
 
     th = (struct fat_text_header*)fatbin_data;
 
+    if(th->obj_name_offset != 0) {
+        if (((char*)th)[th->obj_name_offset + th->obj_name_len] != '\0') {
+            printf("Fatbin object name is not null terminated\n");
+        } else {
+            char *obj_name = (char*)th + th->obj_name_offset;
+            printf("Fatbin object name: %s (len:%#x)\n", obj_name, th->obj_name_len);
+        }
+    }
+
     *text_header = th;
     return 0;
 }
@@ -184,21 +193,107 @@ size_t decompress(const uint8_t* input, size_t input_size, uint8_t* output, size
     return opos;
 }
 
+ssize_t decompress_section(const uint8_t *input, uint8_t **output, size_t *output_size,
+                           struct fat_elf_header *eh, struct fat_text_header *th, size_t *eh_out_offset)
+{
+    struct fat_text_header *th_out = NULL;
+    struct fat_elf_header *eh_out = NULL;
+    uint8_t *output_pos = 0;
+    size_t padding;
+    size_t input_read = 0;
+    const uint8_t zeroes[6] = {0};
+
+    if (output == NULL || output_size == NULL || eh == NULL || th == NULL || eh_out_offset == NULL) {
+        fprintf(stderr, "Error: invalid parameters\n");
+        return 1;
+    }
+
+    if ((*output = realloc(*output, *output_size + th->decompressed_size + eh->header_size + th->header_size)) == NULL) {
+        fprintf(stderr, "Error allocating memory of size %#zx for output buffer: %s\n", 
+                *output_size + th->decompressed_size + eh->header_size + th->header_size, strerror(errno));
+        goto error;
+    }
+    output_pos = *output + *output_size;
+    *output_size += th->decompressed_size + th->header_size;
+
+    if (input == (uint8_t*)eh + eh->header_size + th->header_size) { // We are at the first section
+        if (memcpy(output_pos, eh, eh->header_size) == NULL) {
+            fprintf(stderr, "Error copying data");
+            goto error;
+        }
+        eh_out = ((struct fat_elf_header*)(output_pos));
+        eh_out->size = 0;
+        *eh_out_offset = output_pos - *output;
+        output_pos += eh->header_size;
+        *output_size += eh->header_size;
+    }
+    eh_out = ((struct fat_elf_header*)(*output + *eh_out_offset)); // repair pointer in case realloc moved the buffer
+    eh_out->size += th->decompressed_size + th->header_size;       // set size
+
+    if (memcpy(output_pos, th, th->header_size) == NULL) {
+        fprintf(stderr, "Error copying data");
+        goto error;
+    }
+    th_out = ((struct fat_text_header*)output_pos);
+    th_out->flags &= ~FATBIN_FLAG_COMPRESS;  // clear compressed flag
+    th_out->compressed_size = 0;             // clear compressed size
+    th_out->decompressed_size = 0;           // clear decompressed size
+    th_out->size = th->decompressed_size;    // set size
+
+    output_pos += th->header_size;
+
+    if (decompress(input, th->compressed_size, output_pos, th->decompressed_size) != th->decompressed_size) {
+        fprintf(stderr, "Decompression failed\n");
+        goto error;
+    }
+
+    input_read += th->compressed_size;
+    output_pos += th->decompressed_size;
+
+    // if (input_pos != (uint8_t*)th + eh->size) {
+    //     printf("There is %#zx bytes of data remaining\n", (uint8_t*)th + eh->size - input_pos);
+    // }
+    
+    padding = (8 - (size_t)(input + input_read) % 8);
+    if (memcmp(input + input_read, zeroes, padding) != 0) {
+        printf("Error: expected %#zx zero bytes, got:\n", padding);
+        hexdump(input + input_read, 0x60);
+        goto error;
+    }
+    input_read += padding;
+
+    padding = ((8 - (size_t)th->decompressed_size) % 8);
+    // Because we always allocated enough memory for one more elf_header and this is smaller than
+    // the maximal padding of 7, we do not have to reallocate here.
+    memset(output_pos, 0, padding);
+    *output_size += padding;
+    eh_out->size += padding;
+    th_out->size += padding;
+
+    return input_read;
+ error:
+    free(*output);
+    *output = NULL;
+    return -1;
+}
+
+/** Decompresses a fatbin file
+ * @param fatbin_data Pointer to the fatbin data
+ * @param fatbin_size Size of the fatbin data
+ * @param decompressed_data Pointer to a variable that will be set to point to the decompressed data
+ * @param decompressed_size Pointer to a variable that will be set to the size of the decompressed data
+ */
 size_t decompress_fatbin(const uint8_t* fatbin_data, size_t fatbin_size, uint8_t** decompressed_data)
 {
     struct fat_elf_header *eh = NULL;
     size_t eh_out_offset = 0;
-    struct fat_elf_header *eh_out = NULL;
     struct fat_text_header *th = NULL;
-    struct fat_text_header *th_out = NULL;
     const uint8_t *input_pos = fatbin_data;
-    uint8_t zeroes[6] = {0};
 
     int i = 0;
     uint8_t *output = NULL;
-    uint8_t *output_pos = NULL;
     size_t output_size = 0;
-    size_t padding;
+    ssize_t input_read;
 
     if (fatbin_data == NULL || decompressed_data == NULL) {
         fprintf(stderr, "Error: fatbin_data is NULL\n");
@@ -213,7 +308,6 @@ size_t decompress_fatbin(const uint8_t* fatbin_data, size_t fatbin_size, uint8_t
         printf("elf header no. %d: magic: %#x, version: %#x, header_size: %#x, size: %#zx\n",
                i++, eh->magic, eh->version, eh->header_size, eh->size);
         input_pos += eh->header_size;
-        eh_out = NULL;
         do {
             if (get_text_header(input_pos, fatbin_size - (input_pos - fatbin_data) - eh->header_size, &th) != 0) {
                 fprintf(stderr, "Something went wrong while checking the header.\n");
@@ -222,67 +316,11 @@ size_t decompress_fatbin(const uint8_t* fatbin_data, size_t fatbin_size, uint8_t
             print_header(th);
             input_pos += th->header_size;
 
-            if ((output = realloc(output, output_size + th->decompressed_size + eh->header_size + th->header_size)) == NULL) {
-                fprintf(stderr, "Error allocating memory of size %#zx for output buffer: %s\n", 
-                        output_size + th->decompressed_size + eh->header_size + th->header_size, strerror(errno));
+            if ((input_read = decompress_section(input_pos, &output, &output_size, eh, th, &eh_out_offset)) < 0) {
+                fprintf(stderr, "Something went wrong while decompressing text section.\n");
                 goto error;
             }
-            output_pos = output + output_size;
-            output_size += th->decompressed_size + th->header_size;
-
-            if (eh_out == NULL) {
-                if (memcpy(output_pos, eh, eh->header_size) == NULL) {
-                    fprintf(stderr, "Error copying data");
-                    goto error;
-                }
-                eh_out = ((struct fat_elf_header*)output_pos);
-                eh_out_offset = output_pos - output;
-                eh_out->size = 0;
-                output_pos += eh->header_size;
-                output_size += eh->header_size;
-            }
-            eh_out = ((struct fat_elf_header*)(output + eh_out_offset));   // repair pointer in case realloc moved the buffer
-            eh_out->size += th->decompressed_size + th->header_size;       // set size
-
-            if (memcpy(output_pos, th, th->header_size) == NULL) {
-                fprintf(stderr, "Error copying data");
-                goto error;
-            }
-            th_out = ((struct fat_text_header*)output_pos);
-            th_out->flags &= ~FATBIN_FLAG_COMPRESS;  // clear compressed flag
-            th_out->compressed_size = 0;             // clear compressed size
-            th_out->decompressed_size = 0;           // clear decompressed size
-            th_out->size = th->decompressed_size;    // set size
-
-            output_pos += th->header_size;
-
-            if (decompress(input_pos, th->compressed_size, output_pos, th->decompressed_size) != th->decompressed_size) {
-                fprintf(stderr, "Decompression failed\n");
-                goto error;
-            }
-
-            input_pos += th->compressed_size;
-            output_pos += th->decompressed_size;
-
-            // if (input_pos != (uint8_t*)th + eh->size) {
-            //     printf("There is %#zx bytes of data remaining\n", (uint8_t*)th + eh->size - input_pos);
-            // }
-         
-            padding = ((8 -(size_t)input_pos) % 8);
-            if (memcmp(input_pos, zeroes, padding) != 0) {
-                printf("Error: expected %#zx zero bytes, got:\n", padding);
-                hexdump(input_pos, 0x60);
-                goto error;
-            }
-            input_pos += padding;
-
-            padding = ((8 - (size_t)th->decompressed_size) % 8);
-            // Because we always allocated enough memory for one more elf_header and this is smaller than
-            // the maximal padding of 7, we do not have to reallocate here.
-            memset(output_pos, 0, padding);
-            output_size += padding;
-            eh_out->size += padding;
-            th_out->size += padding;
+            input_pos += input_read;
 
         } while (input_pos < (uint8_t*)eh + eh->header_size + eh->size);
 

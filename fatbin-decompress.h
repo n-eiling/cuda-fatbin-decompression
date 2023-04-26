@@ -24,7 +24,7 @@ struct  __attribute__((__packed__)) fat_text_header
     uint32_t header_size;
     uint64_t size;
     uint32_t compressed_size;       // Size of compressed data
-    uint32_t unknown2; 
+    uint32_t unknown2;              // Address size for PTX?
     uint16_t minor;
     uint16_t major;
     uint32_t arch;

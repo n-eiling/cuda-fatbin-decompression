@@ -49,7 +49,7 @@ samples-bin/nbody.uncompressed.sample : samples samples-bin
 	make -C samples/Samples/5_Domain_Specific/nbody \
 		clean
 	make -C samples/Samples/5_Domain_Specific/nbody \
-		NVCCFLAGS="--no-compress" \
+		NVCCFLAGS="--no-compress -g -G" \
 		SMS="${SMS}" \
 		CPATH="samples/Common" \
 		CUDA_PATH=${CUDA_PATH}
@@ -59,7 +59,7 @@ samples-bin/nbody.compressed.sample : samples samples-bin
 	make -C samples/Samples/5_Domain_Specific/nbody \
 		clean
 	make -C samples/Samples/5_Domain_Specific/nbody \
-		NVCCFLAGS="-Xfatbin --compress-all" \
+		NVCCFLAGS="-Xfatbin --compress-all -g -G" \
 		SMS="${SMS}" \
 		CPATH="samples/Common" \
 		CUDA_PATH=${CUDA_PATH}

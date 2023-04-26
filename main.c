@@ -162,7 +162,7 @@ int main(int argc, char *argv[])
         }
 
         if (compare_data(compare_file.data, output, output_size) != 0) {
-            fprintf(stderr, "Data mismatch\n");
+            fprintf(stderr, "Output data mismatches\n");
             return 1;
         }
         mf_close(&compare_file);
