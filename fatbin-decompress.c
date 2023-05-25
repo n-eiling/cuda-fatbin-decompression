@@ -153,7 +153,7 @@ size_t decompress(const uint8_t* input, size_t input_size, uint8_t* output, size
             return 0;
         }
 #ifdef FATBIN_DECOMPRESS_DEBUG
-        printf("%#04zx nocompress (len:%#x):\n", opos, next_nclen);
+        printf("%#04zx/%#04zx nocompress (len:%#x):\n", opos, ipos, next_nclen);
         hexdump(output + opos, next_nclen);
 #endif
         ipos += next_nclen;
@@ -169,7 +169,7 @@ size_t decompress(const uint8_t* input, size_t input_size, uint8_t* output, size
             } while (input[ipos - 1] == 0xff);
         }
 #ifdef FATBIN_DECOMPRESS_DEBUG
-        printf("%#04zx compress (decompressed len: %#x, back_offset %#x):\n", opos, next_clen, back_offset);
+        printf("%#04zx/%#04zx compress (decompressed len: %#x, back_offset %#x):\n", opos, ipos, next_clen, back_offset);
 #endif
         if (next_clen <= back_offset) {
             if (memcpy(output + opos, output + opos - back_offset, next_clen) == NULL) {
@@ -242,8 +242,11 @@ ssize_t decompress_section(const uint8_t *input, uint8_t **output, size_t *outpu
 
     output_pos += th->header_size;
 
-    if (decompress(input, th->compressed_size, output_pos, th->decompressed_size) != th->decompressed_size) {
-        fprintf(stderr, "Decompression failed\n");
+    size_t decompress_ret;
+
+    if ((decompress_ret = decompress(input, th->compressed_size, output_pos, th->decompressed_size)) != th->decompressed_size) {
+        fprintf(stderr, "Decompression failed: decompressed size (%#0zx) is not as indicated in header (%#0zx).\n",
+                decompress_ret, th->decompressed_size);
         goto error;
     }
 
@@ -290,7 +293,6 @@ size_t decompress_fatbin(const uint8_t* fatbin_data, size_t fatbin_size, uint8_t
     struct fat_text_header *th = NULL;
     const uint8_t *input_pos = fatbin_data;
 
-    int i = 0;
     uint8_t *output = NULL;
     size_t output_size = 0;
     ssize_t input_read;
@@ -305,10 +307,13 @@ size_t decompress_fatbin(const uint8_t* fatbin_data, size_t fatbin_size, uint8_t
             fprintf(stderr, "Something went wrong while checking the header.\n");
             goto error;
         }
-        printf("elf header no. %d: magic: %#x, version: %#x, header_size: %#x, size: %#zx\n",
-               i++, eh->magic, eh->version, eh->header_size, eh->size);
+        // printf("elf header no. %d: magic: %#x, version: %#x, header_size: %#x, size: %#zx\n",
+        //        i++, eh->magic, eh->version, eh->header_size, eh->size);
         input_pos += eh->header_size;
         do {
+            // printf("input_pos: %#zx, fatbin_size: %#zx, eh header_size: %#x\n", input_pos - fatbin_data, fatbin_size, eh->header_size);
+            // printf("remaining (data): %#zx\n", fatbin_size - (input_pos - fatbin_data) - eh->header_size);
+            // printf("remaining (header): %#zx\n", (uint8_t*)eh + (uint64_t)(eh->header_size) + eh->size - input_pos);
             if (get_text_header(input_pos, fatbin_size - (input_pos - fatbin_data) - eh->header_size, &th) != 0) {
                 fprintf(stderr, "Something went wrong while checking the header.\n");
                 goto error;
@@ -322,10 +327,15 @@ size_t decompress_fatbin(const uint8_t* fatbin_data, size_t fatbin_size, uint8_t
             }
             input_pos += input_read;
 
-        } while (input_pos < (uint8_t*)eh + eh->header_size + eh->size);
+            // printf("input_read: %#zx, th size: %#zx\n", input_read, th->size);
+            // printf("input_pos: %p, eh: %p, eh size: %#zx, loop: %#llx\n", input_pos, eh, eh->size,
+            //     (long long)((uint8_t*)eh + (uint64_t)(eh->header_size) + eh->size) - (long long)input_pos);
+
+        } while (input_pos < (uint8_t*)eh + (uint64_t)(eh->header_size) + eh->size);
 
         //printf("##### Decompressed data (size %#zx): #####\n", th->decompressed_size);
         //hexdump(output_pos, th->decompressed_size);
+        //printf("outer loop: %#llx\n", (long long)(fatbin_data + //fatbin_size) - (long long)input_pos);
     }
 
     *decompressed_data = output;
