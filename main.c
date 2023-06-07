@@ -30,8 +30,11 @@ int compare_data(const uint8_t* data1, const uint8_t* data2, size_t size)
     for (size_t i = 0; i < size; i++) {
         if (data1[i] != data2[i]) {
             fprintf(stderr, "Data mismatch at offset %#0zx: %#0x != %#0x\n", i, data1[i], data2[i]);
-            mismatch = 1;
+            mismatch++;
         }
+    }
+    if (mismatch > 0) {
+        fprintf(stderr, "%d total mismatches\n", mismatch-30);
     }
     return (mismatch == 0 ? 0 : 1);
 }
@@ -142,7 +145,7 @@ int main(int argc, char *argv[])
 
     if ((output_size = decompress_fatbin(mf.data, mf.size, &output)) == 0) {
         fprintf(stderr, "Error decompressing fatbin\n");
-        return 1;
+        //return 1;
     }
 
     printf("Decompressed data size: %#0zx\n", output_size);

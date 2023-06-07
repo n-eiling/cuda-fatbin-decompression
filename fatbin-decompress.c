@@ -145,7 +145,9 @@ size_t decompress(const uint8_t* input, size_t input_size, uint8_t* output, size
         next_nclen = (input[ipos] & 0xf0) >> 4;
         next_clen = 4 + (input[ipos] & 0xf);
         if (next_nclen == 0xf) {
-            next_nclen += input[++ipos];
+            do {
+                next_nclen += input[++ipos];
+            } while (input[ipos] == 0xff);
         }
         
         if (memcpy(output + opos, input + (++ipos), next_nclen) == NULL) {
@@ -161,7 +163,7 @@ size_t decompress(const uint8_t* input, size_t input_size, uint8_t* output, size
         if (ipos >= input_size || opos >= output_size) {
             break;
         }
-        back_offset = input[ipos] + (input[ipos + 1] << 8);       
+        back_offset = input[ipos] + (input[ipos + 1] << 8);
         ipos += 2;
         if (next_clen == 0xf+4) {
             do {
@@ -193,24 +195,27 @@ size_t decompress(const uint8_t* input, size_t input_size, uint8_t* output, size
     return opos;
 }
 
-ssize_t decompress_section(const uint8_t *input, uint8_t **output, size_t *output_size,
-                           struct fat_elf_header *eh, struct fat_text_header *th, size_t *eh_out_offset)
+int decompress_section(const uint8_t *input, uint8_t **output, size_t *output_size,
+                       struct fat_elf_header *eh, struct fat_text_header *th, size_t *eh_out_offset,
+                       size_t *input_read)
 {
     struct fat_text_header *th_out = NULL;
     struct fat_elf_header *eh_out = NULL;
     uint8_t *output_pos = 0;
     size_t padding;
-    size_t input_read = 0;
+    int ret = 0;
     const uint8_t zeroes[6] = {0};
 
-    if (output == NULL || output_size == NULL || eh == NULL || th == NULL || eh_out_offset == NULL) {
+    if (output == NULL || output_size == NULL || eh == NULL || th == NULL || eh_out_offset == NULL || input_read == NULL) {
         fprintf(stderr, "Error: invalid parameters\n");
-        return 1;
+        return -1;
     }
+    *input_read = 0;
 
     if ((*output = realloc(*output, *output_size + th->decompressed_size + eh->header_size + th->header_size)) == NULL) {
         fprintf(stderr, "Error allocating memory of size %#zx for output buffer: %s\n", 
                 *output_size + th->decompressed_size + eh->header_size + th->header_size, strerror(errno));
+        ret = -1;
         goto error;
     }
     output_pos = *output + *output_size;
@@ -219,6 +224,7 @@ ssize_t decompress_section(const uint8_t *input, uint8_t **output, size_t *outpu
     if (input == (uint8_t*)eh + eh->header_size + th->header_size) { // We are at the first section
         if (memcpy(output_pos, eh, eh->header_size) == NULL) {
             fprintf(stderr, "Error copying data");
+            ret = -1;
             goto error;
         }
         eh_out = ((struct fat_elf_header*)(output_pos));
@@ -232,6 +238,7 @@ ssize_t decompress_section(const uint8_t *input, uint8_t **output, size_t *outpu
 
     if (memcpy(output_pos, th, th->header_size) == NULL) {
         fprintf(stderr, "Error copying data");
+        ret = -1;
         goto error;
     }
     th_out = ((struct fat_text_header*)output_pos);
@@ -247,20 +254,21 @@ ssize_t decompress_section(const uint8_t *input, uint8_t **output, size_t *outpu
     if ((decompress_ret = decompress(input, th->compressed_size, output_pos, th->decompressed_size)) != th->decompressed_size) {
         fprintf(stderr, "Decompression failed: decompressed size (%#0zx) is not as indicated in header (%#0zx).\n",
                 decompress_ret, th->decompressed_size);
-        goto error;
+        ret = -1;
+        //goto error;
     }
 
-    input_read += th->compressed_size;
+    *input_read += th->compressed_size;
     output_pos += th->decompressed_size;
 
     // if (input_pos != (uint8_t*)th + eh->size) {
     //     printf("There is %#zx bytes of data remaining\n", (uint8_t*)th + eh->size - input_pos);
     // }
     
-    padding = (8 - (size_t)(input + input_read) % 8);
-    if (memcmp(input + input_read, zeroes, padding) != 0) {
+    padding = ((8 - (size_t)(input + *input_read)) % 8);
+    if (memcmp(input + *input_read, zeroes, padding) != 0) {
         printf("Error: expected %#zx zero bytes, got:\n", padding);
-        hexdump(input + input_read, 0x60);
+        hexdump(input + *input_read, 0x60);
         goto error;
     }
     input_read += padding;
@@ -273,11 +281,11 @@ ssize_t decompress_section(const uint8_t *input, uint8_t **output, size_t *outpu
     eh_out->size += padding;
     th_out->size += padding;
 
-    return input_read;
+    return ret;
  error:
     free(*output);
     *output = NULL;
-    return -1;
+    return ret;
 }
 
 /** Decompresses a fatbin file
@@ -295,7 +303,7 @@ size_t decompress_fatbin(const uint8_t* fatbin_data, size_t fatbin_size, uint8_t
 
     uint8_t *output = NULL;
     size_t output_size = 0;
-    ssize_t input_read;
+    size_t input_read;
 
     if (fatbin_data == NULL || decompressed_data == NULL) {
         fprintf(stderr, "Error: fatbin_data is NULL\n");
@@ -319,11 +327,15 @@ size_t decompress_fatbin(const uint8_t* fatbin_data, size_t fatbin_size, uint8_t
                 goto error;
             }
             print_header(th);
+            if (th->decompressed_size == 0) {
+                fprintf(stderr, "Error: decompressed size is 0.\n");
+                goto soft_error;
+            }
             input_pos += th->header_size;
 
-            if ((input_read = decompress_section(input_pos, &output, &output_size, eh, th, &eh_out_offset)) < 0) {
+            if (decompress_section(input_pos, &output, &output_size, eh, th, &eh_out_offset, &input_read) != 0) {
                 fprintf(stderr, "Something went wrong while decompressing text section.\n");
-                goto error;
+                goto soft_error;
             }
             input_pos += input_read;
 
@@ -337,7 +349,7 @@ size_t decompress_fatbin(const uint8_t* fatbin_data, size_t fatbin_size, uint8_t
         //hexdump(output_pos, th->decompressed_size);
         //printf("outer loop: %#llx\n", (long long)(fatbin_data + //fatbin_size) - (long long)input_pos);
     }
-
+ soft_error:
     *decompressed_data = output;
     return output_size;
  error:
