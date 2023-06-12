@@ -137,9 +137,9 @@ static int get_text_header(const uint8_t* fatbin_data, size_t fatbin_size, struc
 size_t decompress(const uint8_t* input, size_t input_size, uint8_t* output, size_t output_size)
 {
     size_t ipos = 0, opos = 0;  
-    uint16_t next_nclen;  // length of next non-compressed segment
-    uint16_t next_clen;   // length of next compressed segment
-    uint16_t back_offset; // negative offset where redudant data is located, relative to current opos
+    uint64_t next_nclen;  // length of next non-compressed segment
+    uint64_t next_clen;   // length of next compressed segment
+    uint64_t back_offset; // negative offset where redudant data is located, relative to current opos
 
     while (ipos < input_size) {
         next_nclen = (input[ipos] & 0xf0) >> 4;
@@ -155,7 +155,7 @@ size_t decompress(const uint8_t* input, size_t input_size, uint8_t* output, size
             return 0;
         }
 #ifdef FATBIN_DECOMPRESS_DEBUG
-        printf("%#04zx/%#04zx nocompress (len:%#x):\n", opos, ipos, next_nclen);
+        printf("%#04zx/%#04zx nocompress (len:%#zx):\n", opos, ipos, next_nclen);
         hexdump(output + opos, next_nclen);
 #endif
         ipos += next_nclen;
@@ -171,7 +171,7 @@ size_t decompress(const uint8_t* input, size_t input_size, uint8_t* output, size
             } while (input[ipos - 1] == 0xff);
         }
 #ifdef FATBIN_DECOMPRESS_DEBUG
-        printf("%#04zx/%#04zx compress (decompressed len: %#x, back_offset %#x):\n", opos, ipos, next_clen, back_offset);
+        printf("%#04zx/%#04zx compress (decompressed len: %#zx, back_offset %#zx):\n", opos, ipos, next_clen, back_offset);
 #endif
         if (next_clen <= back_offset) {
             if (memcpy(output + opos, output + opos - back_offset, next_clen) == NULL) {
